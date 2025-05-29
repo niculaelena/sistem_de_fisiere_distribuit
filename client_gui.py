@@ -1,4 +1,4 @@
-# client_gui.py
+# client_gui.py (versiune actualizată fără „Reîncarcă lista”)
 import os
 import socket
 import threading
@@ -6,12 +6,10 @@ import tkinter as tk
 from tkinter import simpledialog, messagebox, ttk
 from client import main as run_sync_client
 
-# === CONFIG ===
 LOCAL_DIR = './local'
 SERVER_HOST = '127.0.0.1'
 SERVER_PORT = 9999
 
-# === UTILITARE ===
 def test_server_connection(host=SERVER_HOST, port=SERVER_PORT, timeout=2):
     try:
         with socket.create_connection((host, port), timeout=timeout):
@@ -22,7 +20,6 @@ def test_server_connection(host=SERVER_HOST, port=SERVER_PORT, timeout=2):
 def ensure_local_dir():
     os.makedirs(LOCAL_DIR, exist_ok=True)
 
-# === FEREASTRA DE EROARE CU BUTON REÎNCEARCĂ ===
 def show_connection_error():
     def try_again():
         if test_server_connection():
@@ -38,12 +35,10 @@ def show_connection_error():
     tk.Button(error_window, text="Ieși", command=error_window.destroy, width=20).pack()
     error_window.mainloop()
 
-# === PORNEȘTE CLIENTUL PE THREAD ===
 def start_sync_thread():
     thread = threading.Thread(target=run_sync_client, daemon=True)
     thread.start()
 
-# === INTERFAȚA GRAFICĂ ===
 def launch_gui():
     ensure_local_dir()
 
@@ -52,12 +47,9 @@ def launch_gui():
     app.geometry("420x400")
     app.resizable(False, False)
 
-    # Stil modern (font, culori, spațiere)
     style = ttk.Style()
     style.configure("TButton", padding=6, font=("Segoe UI", 10))
-    style.configure("TListbox", font=("Consolas", 10))
 
-    # === FUNCȚII ACȚIUNI ===
     def create_file():
         name = simpledialog.askstring("Crează fișier", "Introdu numele fișierului:")
         if name:
@@ -95,15 +87,12 @@ def launch_gui():
             if os.path.isfile(full_path):
                 file_listbox.insert(tk.END, file)
 
-    # === INTERFAȚĂ ===
-
     frame_buttons = tk.Frame(app)
     frame_buttons.pack(pady=10)
 
     ttk.Button(frame_buttons, text="Crează fișier", command=create_file).grid(row=0, column=0, padx=5)
     ttk.Button(frame_buttons, text="Șterge fișier", command=delete_file).grid(row=0, column=1, padx=5)
     ttk.Button(frame_buttons, text="Redenumește", command=rename_file).grid(row=0, column=2, padx=5)
-    ttk.Button(frame_buttons, text="Reîncarcă lista", command=refresh_list).grid(row=0, column=3, padx=5)
 
     frame_list = tk.Frame(app)
     frame_list.pack(fill=tk.BOTH, expand=True, padx=20, pady=10)
@@ -119,7 +108,6 @@ def launch_gui():
     start_sync_thread()
     app.mainloop()
 
-# === PUNCT DE START ===
 if __name__ == "__main__":
     if test_server_connection():
         launch_gui()
