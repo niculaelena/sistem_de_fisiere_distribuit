@@ -7,7 +7,7 @@ import base64
 from watchdog.observers import Observer
 from watchdog.events import FileSystemEventHandler, FileMovedEvent
 
-LOCAL_DIR = './local'
+LOCAL_DIR = os.environ.get("LOCAL_DIR", "./local")
 
 def encode_file(path):
     with open(path, 'rb') as f:
