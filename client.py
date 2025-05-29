@@ -101,4 +101,7 @@ def main():
         observer.join()
 
 if __name__ == '__main__':
-    main()
+    try:
+        conn.connect(('127.0.0.1', 9999))
+    except ConnectionRefusedError:
+        raise
