@@ -64,7 +64,7 @@ def listen_to_server(conn):
             elif msg["action"] == "file_change":
                 full_path = os.path.join(LOCAL_DIR, msg["path"])
 
-                if msg["change"] == "create" or msg["change"] == "modify":
+                if msg["change"] in ["create", "modify"]:
                     decode_to_file(msg["content"], full_path)
 
                 elif msg["change"] == "delete":
@@ -85,13 +85,9 @@ def main():
     conn = socket.socket()
     conn.connect(('127.0.0.1', 9999))
 
-    # cerere sincronizare inițială
     conn.sendall(json.dumps({"action": "sync_request"}).encode())
-
-    # thread pentru ascultat serverul
     threading.Thread(target=listen_to_server, args=(conn,), daemon=True).start()
 
-    # monitorizare fișiere locale
     handler = ChangeHandler(conn)
     observer = Observer()
     observer.schedule(handler, LOCAL_DIR, recursive=True)
