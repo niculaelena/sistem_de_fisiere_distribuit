@@ -44,7 +44,7 @@ def handle_client(conn, addr):
             elif msg["action"] == "file_change":
                 path = os.path.join(SHARED_DIR, msg["path"])
 
-                if msg["change"] == "create" or msg["change"] == "modify":
+                if msg["change"] in ["create", "modify"]:
                     os.makedirs(os.path.dirname(path), exist_ok=True)
                     with open(path, "wb") as f:
                         f.write(base64.b64decode(msg["content"]))
@@ -59,7 +59,6 @@ def handle_client(conn, addr):
                     if os.path.exists(path):
                         os.rename(path, new_path)
 
-                # Trimitem mai departe la alți clienți
                 broadcast(data, sender=conn)
 
     except Exception as e:
