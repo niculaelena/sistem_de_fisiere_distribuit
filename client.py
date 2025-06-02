@@ -1,107 +1,121 @@
-# client.py
 import socket
-import threading
 import os
+import sys
 import json
 import base64
-from watchdog.observers import Observer
-from watchdog.events import FileSystemEventHandler, FileMovedEvent
+import threading
+import time
+import hashlib
 
-LOCAL_DIR = os.environ.get("LOCAL_DIR", "./local")
+SERVER_HOST = '127.0.0.1'
+SERVER_PORT = 9000
+LOCAL_FOLDER = sys.argv[1] if len(sys.argv) > 1 else "client_data"
 
-def encode_file(path):
-    with open(path, 'rb') as f:
-        return base64.b64encode(f.read()).decode()
+def file_hash(content_bytes):
+    return hashlib.md5(content_bytes).hexdigest()
 
-def decode_to_file(encoded_str, path):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    with open(path, 'wb') as f:
-        f.write(base64.b64decode(encoded_str.encode()))
+def get_local_files_info():
+    info = {}
+    for root, _, files in os.walk(LOCAL_FOLDER):
+        for file in files:
+            path = os.path.join(root, file)
+            rel_path = os.path.relpath(path, LOCAL_FOLDER)
+            with open(path, 'rb') as f:
+                content = f.read()
+                info[rel_path] = {
+                    'hash': file_hash(content),
+                    'content': base64.b64encode(content).decode('utf-8')
+                }
+    return info
 
-class ChangeHandler(FileSystemEventHandler):
-    def __init__(self, conn):
-        self.conn = conn
+def detect_changes(old, new):
+    changes = []
+    old_paths = set(old.keys())
+    new_paths = set(new.keys())
 
-    def on_modified(self, event):
-        if not event.is_directory:
-            rel_path = os.path.relpath(event.src_path, LOCAL_DIR)
-            content = encode_file(event.src_path)
-            msg = {"action": "file_change", "change": "modify", "path": rel_path, "content": content}
-            self.conn.sendall(json.dumps(msg).encode())
+    for path in old_paths - new_paths:
+        changes.append({"type": "delete", "path": path})
+    for path in new_paths - old_paths:
+        changes.append({"type": "create", "path": path, "content": new[path]['content']})
+    for path in old_paths & new_paths:
+        if old[path]['hash'] != new[path]['hash']:
+            changes.append({"type": "modify", "path": path, "content": new[path]['content']})
 
-    def on_created(self, event):
-        if not event.is_directory:
-            rel_path = os.path.relpath(event.src_path, LOCAL_DIR)
-            content = encode_file(event.src_path)
-            msg = {"action": "file_change", "change": "create", "path": rel_path, "content": content}
-            self.conn.sendall(json.dumps(msg).encode())
+    return changes
 
-    def on_deleted(self, event):
-        if not event.is_directory:
-            rel_path = os.path.relpath(event.src_path, LOCAL_DIR)
-            msg = {"action": "file_change", "change": "delete", "path": rel_path}
-            self.conn.sendall(json.dumps(msg).encode())
+def apply_change(change):
+    ctype = change["type"]
+    rel_path = change.get("path")
 
-    def on_moved(self, event: FileMovedEvent):
-        rel_src = os.path.relpath(event.src_path, LOCAL_DIR)
-        rel_dest = os.path.relpath(event.dest_path, LOCAL_DIR)
-        msg = {"action": "file_change", "change": "rename", "path": rel_src, "new_path": rel_dest}
-        self.conn.sendall(json.dumps(msg).encode())
+    if ctype in ("create", "modify"):
+        abs_path = os.path.join(LOCAL_FOLDER, rel_path)
+        os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+        content = base64.b64decode(change["content"].encode('utf-8'))
+        with open(abs_path, 'wb') as f:
+            f.write(content)
+        print(f"[SYNC] {ctype.upper()} {rel_path}")
 
-def listen_to_server(conn):
+    elif ctype == "delete":
+        abs_path = os.path.join(LOCAL_FOLDER, rel_path)
+        if os.path.exists(abs_path):
+            os.remove(abs_path)
+        print(f"[SYNC] DELETE {rel_path}")
+
+    elif ctype == "rename":
+        old_path = os.path.join(LOCAL_FOLDER, change["old_path"])
+        new_path = os.path.join(LOCAL_FOLDER, change["new_path"])
+        if os.path.exists(old_path):
+            os.makedirs(os.path.dirname(new_path), exist_ok=True)
+            os.rename(old_path, new_path)
+        print(f"[SYNC] RENAME {change['old_path']} -> {change['new_path']}")
+
+def listen_for_server(sock):
     while True:
         try:
-            data = conn.recv(16384)
+            data = sock.recv(10_000_000)
             if not data:
                 break
-            msg = json.loads(data.decode())
-
-            if msg["action"] == "sync_data":
-                for f in msg["files"]:
-                    path = os.path.join(LOCAL_DIR, f["path"])
-                    decode_to_file(f["content"], path)
-
-            elif msg["action"] == "file_change":
-                full_path = os.path.join(LOCAL_DIR, msg["path"])
-
-                if msg["change"] in ["create", "modify"]:
-                    decode_to_file(msg["content"], full_path)
-
-                elif msg["change"] == "delete":
-                    if os.path.exists(full_path):
-                        os.remove(full_path)
-
-                elif msg["change"] == "rename":
-                    new_path = os.path.join(LOCAL_DIR, msg["new_path"])
-                    if os.path.exists(full_path):
-                        os.rename(full_path, new_path)
-
+            msg = json.loads(data.decode('utf-8'))
+            if msg["type"] == "sync":
+                print("[SERVER] Sincronizare initiala...")
+                for rel_path, content in msg["data"].items():
+                    apply_change({"type": "create", "path": rel_path, "content": content})
+            elif msg["type"] == "sync_changes":
+                print(f"[SERVER] Primit modificari de sincronizat: {len(msg['changes'])} fisiere")
+                for change in msg["changes"]:
+                    apply_change(change)
         except Exception as e:
-            print(f"[!] Eroare client: {e}")
+            print(f"[ERROR] {e}")
             break
 
+def watch_and_send_changes(sock):
+    old_state = get_local_files_info()
+    while True:
+        time.sleep(2)
+        new_state = get_local_files_info()
+        changes = detect_changes(old_state, new_state)
+        if changes:
+            try:
+                msg = {"type": "update_changes", "changes": changes}
+                sock.sendall(json.dumps(msg).encode('utf-8'))
+                print(f"[CLIENT] Trimite modificari catre server: {[c['type'] + ' ' + c['path'] for c in changes]}")
+                old_state = new_state
+            except Exception as e:
+                print(f"[ERROR] {e}")
+                break
+
 def main():
-    os.makedirs(LOCAL_DIR, exist_ok=True)
-    conn = socket.socket()
-    conn.connect(('127.0.0.1', 9999))
+    if not os.path.exists(LOCAL_FOLDER):
+        os.makedirs(LOCAL_FOLDER)
 
-    conn.sendall(json.dumps({"action": "sync_request"}).encode())
-    threading.Thread(target=listen_to_server, args=(conn,), daemon=True).start()
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        s.connect((SERVER_HOST, SERVER_PORT))
+        print("[CLIENT] Conectat la server.")
 
-    handler = ChangeHandler(conn)
-    observer = Observer()
-    observer.schedule(handler, LOCAL_DIR, recursive=True)
-    observer.start()
+        threading.Thread(target=listen_for_server, args=(s,), daemon=True).start()
+        threading.Thread(target=watch_and_send_changes, args=(s,), daemon=True).start()
 
-    try:
-        while True:
-            pass
-    except KeyboardInterrupt:
-        observer.stop()
-        observer.join()
+        input("\n[CLIENT] Apasa ENTER pentru a iesi...\n")
 
-if __name__ == '__main__':
-    try:
-        conn.connect(('127.0.0.1', 9999))
-    except ConnectionRefusedError:
-        raise
+if __name__ == "__main__":
+    main()
